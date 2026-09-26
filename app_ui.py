@@ -1065,6 +1065,43 @@ class SingerProApp(ctk.CTk):
             else:
                 self.combo_output.set(out_names[0])
 
+        self._update_supported_samplerates()
+
+    def _update_supported_samplerates(self):
+        in_id, out_id = self._get_selected_device_ids()
+        supported_rates, recommended_rate = self.engine.get_supported_samplerates(in_id, out_id)
+
+        rate_labels = []
+        for r in supported_rates:
+            if r == recommended_rate and len(supported_rates) == 1:
+                rate_labels.append(f"{r} Hz (Hardware Native - Only Supported Rate)")
+            elif r == 48000:
+                rate_labels.append(f"{r} Hz (Studio Standard - Recommended)")
+            elif r == 44100:
+                rate_labels.append(f"{r} Hz (CD Audio)")
+            elif r == 96000:
+                rate_labels.append(f"{r} Hz (High Res 96kHz)")
+            else:
+                rate_labels.append(f"{r} Hz")
+
+        if not rate_labels:
+            rate_labels = ["48000 Hz (Hardware Native)"]
+
+        self.combo_samplerate.configure(values=rate_labels)
+
+        # Ensure current selection matches supported
+        current_sr = self._get_samplerate()
+        if current_sr not in supported_rates:
+            for label in rate_labels:
+                if str(recommended_rate) in label:
+                    self.combo_samplerate.set(label)
+                    break
+        else:
+            for label in rate_labels:
+                if str(current_sr) in label:
+                    self.combo_samplerate.set(label)
+                    break
+
     def _on_driver_filter_changed(self, value):
         was_running = self.engine.is_running
         if was_running:
@@ -1074,15 +1111,29 @@ class SingerProApp(ctk.CTk):
             self._toggle_monitoring()
 
     def _on_device_selection_changed(self, *args):
+        self._update_supported_samplerates()
         if self.engine.is_running:
-            # Restart stream with new devices
             self._restart_stream()
 
     def _on_buffer_changed(self, *args):
         if self.engine.is_running:
             self._restart_stream()
 
-    def _on_samplerate_changed(self, *args):
+    def _on_samplerate_changed(self, choice=None):
+        in_id, out_id = self._get_selected_device_ids()
+        supported_rates, recommended_rate = self.engine.get_supported_samplerates(in_id, out_id)
+        target_sr = self._get_samplerate()
+
+        if target_sr not in supported_rates:
+            for val in self.combo_samplerate.cget("values"):
+                if str(recommended_rate) in val:
+                    self.combo_samplerate.set(val)
+                    break
+            self.lbl_status_text.configure(
+                text=f"⚠️ {target_sr} Hz is unsupported by the selected device(s) in this driver mode. Kept {recommended_rate} Hz."
+            )
+            return
+
         if self.engine.is_running:
             self._restart_stream()
 
@@ -1113,8 +1164,9 @@ class SingerProApp(ctk.CTk):
 
     def _get_samplerate(self):
         val = self.combo_samplerate.get()
-        if "44100" in val: return 44100
-        if "96000" in val: return 96000
+        for num in (192000, 96000, 88200, 48000, 44100):
+            if str(num) in val:
+                return num
         return 48000
 
     def _toggle_monitoring(self):
@@ -1139,15 +1191,19 @@ class SingerProApp(ctk.CTk):
                 self.btn_monitor_toggle.configure(text="⏹ STOP MONITORING", fg_color="#e11d48", hover_color="#be123c")
                 self.lbl_status_badge.configure(text="🟢 LIVE MONITORING", fg_color="#065f46", text_color="#34d399")
                 lat = self.engine.estimated_latency_ms
-                self.lbl_latency_badge.configure(text=f"⚡ Latency: {lat:.1f} ms ({bs} smp @ {sr}Hz)", text_color="#38bdf8")
-                self.lbl_status_text.configure(text=f"Active duplex stream: Input {in_id} -> Output {out_id} | Latency: ~{lat:.1f} ms")
+                actual_sr = self.engine.sample_rate
+                self.lbl_latency_badge.configure(text=f"⚡ Latency: {lat:.1f} ms ({bs} smp @ {actual_sr}Hz)", text_color="#38bdf8")
+                self.lbl_status_text.configure(text=f"Active duplex stream: Input {in_id} -> Output {out_id} | Latency: ~{lat:.1f} ms | {actual_sr} Hz")
             else:
                 messagebox.showerror("Audio Stream Error", f"Failed to start stream with selected devices.\n{self.engine.last_status_msg}")
 
     def _restart_stream(self):
         if self.engine.is_running:
-            self._toggle_monitoring()
-            self.after(100, self._toggle_monitoring)
+            self.engine.stop()
+            self.btn_monitor_toggle.configure(text="▶ START MONITORING", fg_color="#2563eb", hover_color="#1d4ed8")
+            self.lbl_status_badge.configure(text="⚪ IDLE", fg_color="#334155", text_color="#cbd5e1")
+            self.lbl_latency_badge.configure(text="⚡ Est. Latency: -- ms", text_color="#94a3b8")
+            self.after(60, self._toggle_monitoring)
 
     def _toggle_recording(self):
         if not self.engine.is_recording:

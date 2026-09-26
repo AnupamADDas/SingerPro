@@ -101,6 +101,54 @@ class AudioEngine:
         
         return input_devs, output_devs
 
+    @staticmethod
+    def get_supported_samplerates(input_id, output_id):
+        """
+        Determine which sample rates are natively supported by both selected devices.
+        Returns (list_of_supported_rates, recommended_rate).
+        """
+        candidate_rates = [48000, 44100, 96000, 88200]
+        supported = []
+        defaults = []
+        
+        for dev_id in (input_id, output_id):
+            if dev_id is not None:
+                try:
+                    info = sd.query_devices(dev_id)
+                    rate = int(info.get('default_samplerate', 48000))
+                    if rate not in defaults:
+                        defaults.append(rate)
+                except Exception:
+                    pass
+                    
+        for r in defaults:
+            if r not in candidate_rates:
+                candidate_rates.insert(0, r)
+                
+        for sr in candidate_rates:
+            in_ok = True
+            out_ok = True
+            if input_id is not None:
+                try:
+                    sd.check_input_settings(device=input_id, samplerate=sr)
+                except Exception:
+                    in_ok = False
+            if output_id is not None:
+                try:
+                    sd.check_output_settings(device=output_id, samplerate=sr)
+                except Exception:
+                    out_ok = False
+            if in_ok and out_ok:
+                supported.append(sr)
+                
+        if not supported and defaults:
+            supported = defaults
+        elif not supported:
+            supported = [48000]
+            
+        recommended = 48000 if 48000 in supported else supported[0]
+        return supported, recommended
+
     def start(self, input_id, output_id, sample_rate=48000, block_size=256):
         """Start live monitoring stream with requested devices and parameters."""
         if self.is_running:
@@ -108,9 +156,18 @@ class AudioEngine:
             
         self.input_device_id = input_id
         self.output_device_id = output_id
-        self.sample_rate = sample_rate
         self.block_size = block_size
-        self.dsp.set_sample_rate(sample_rate)
+        
+        # Verify and auto-negotiate sample rate with hardware
+        supported, recommended = self.get_supported_samplerates(input_id, output_id)
+        if sample_rate not in supported:
+            print(f"Sample rate {sample_rate} Hz unsupported by devices; auto-negotiating to {recommended} Hz.")
+            self.sample_rate = recommended
+            self.last_status_msg = f"Auto-adjusted to {recommended} Hz (device hardware rate)"
+        else:
+            self.sample_rate = sample_rate
+            
+        self.dsp.set_sample_rate(self.sample_rate)
         
         # Try unified duplex stream first (lowest latency)
         success = self._start_duplex_stream()
@@ -120,7 +177,8 @@ class AudioEngine:
             
         if success:
             self.is_running = True
-            self.last_status_msg = "Monitoring Active"
+            if "Auto-adjusted" not in self.last_status_msg:
+                self.last_status_msg = f"Monitoring Active ({self.sample_rate} Hz)"
         return success
 
     def _start_duplex_stream(self):
