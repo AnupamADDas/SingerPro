@@ -12,6 +12,7 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 import numpy as np
+import sounddevice as sd
 
 from dsp_engine import MasterDSPPipeline
 from audio_engine import AudioEngine
@@ -1071,27 +1072,37 @@ class SingerProApp(ctk.CTk):
         in_id, out_id = self._get_selected_device_ids()
         supported_rates, recommended_rate = self.engine.get_supported_samplerates(in_id, out_id)
 
+        in_info = sd.query_devices(in_id) if in_id is not None else {}
+        out_info = sd.query_devices(out_id) if out_id is not None else {}
+        in_def = int(in_info.get('default_samplerate', 48000))
+        out_def = int(out_info.get('default_samplerate', 48000))
+
         rate_labels = []
-        for r in supported_rates:
-            if r == recommended_rate and len(supported_rates) == 1:
-                rate_labels.append(f"{r} Hz (Hardware Native - Only Supported Rate)")
-            elif r == 48000:
-                rate_labels.append(f"{r} Hz (Studio Standard - Recommended)")
-            elif r == 44100:
-                rate_labels.append(f"{r} Hz (CD Audio)")
-            elif r == 96000:
-                rate_labels.append(f"{r} Hz (High Res 96kHz)")
-            else:
-                rate_labels.append(f"{r} Hz")
+        if in_id is not None and out_id is not None and in_def != out_def:
+            rate_labels.append(f"{out_def} Hz (Bluetooth Dual-Rate: {in_def//1000}k Mic -> {out_def//1000}k Output)")
+        else:
+            for r in supported_rates:
+                if r == recommended_rate and len(supported_rates) == 1:
+                    rate_labels.append(f"{r} Hz (Hardware Native - Only Supported Rate)")
+                elif r == 48000:
+                    rate_labels.append(f"{r} Hz (Studio Standard - Recommended)")
+                elif r == 44100:
+                    rate_labels.append(f"{r} Hz (CD Audio)")
+                elif r == 96000:
+                    rate_labels.append(f"{r} Hz (High Res 96kHz)")
+                else:
+                    rate_labels.append(f"{r} Hz")
 
         if not rate_labels:
             rate_labels = ["48000 Hz (Hardware Native)"]
 
         self.combo_samplerate.configure(values=rate_labels)
 
-        # Ensure current selection matches supported
+        # Select rate
         current_sr = self._get_samplerate()
-        if current_sr not in supported_rates:
+        if in_def != out_def:
+            self.combo_samplerate.set(rate_labels[0])
+        elif current_sr not in supported_rates:
             for label in rate_labels:
                 if str(recommended_rate) in label:
                     self.combo_samplerate.set(label)
@@ -1130,7 +1141,7 @@ class SingerProApp(ctk.CTk):
                     self.combo_samplerate.set(val)
                     break
             self.lbl_status_text.configure(
-                text=f"⚠️ {target_sr} Hz is unsupported by the selected device(s) in this driver mode. Kept {recommended_rate} Hz."
+                text=f"Note: Kept {recommended_rate} Hz for selected device configuration."
             )
             return
 
@@ -1173,9 +1184,9 @@ class SingerProApp(ctk.CTk):
         if self.engine.is_running:
             # Stop monitoring
             self.engine.stop()
-            self.btn_monitor_toggle.configure(text="▶ START MONITORING", fg_color="#2563eb", hover_color="#1d4ed8")
-            self.lbl_status_badge.configure(text="⚪ IDLE", fg_color="#334155", text_color="#cbd5e1")
-            self.lbl_latency_badge.configure(text="⚡ Est. Latency: -- ms", text_color="#94a3b8")
+            self.btn_monitor_toggle.configure(text="START MONITORING", fg_color="#2563eb", hover_color="#1d4ed8")
+            self.lbl_status_badge.configure(text="IDLE", fg_color="#334155", text_color="#cbd5e1")
+            self.lbl_latency_badge.configure(text="Est. Latency: -- ms", text_color="#94a3b8")
             self.lbl_status_text.configure(text="Monitoring stopped.")
         else:
             in_id, out_id = self._get_selected_device_ids()
@@ -1188,12 +1199,18 @@ class SingerProApp(ctk.CTk):
 
             success = self.engine.start(in_id, out_id, sample_rate=sr, block_size=bs)
             if success:
-                self.btn_monitor_toggle.configure(text="⏹ STOP MONITORING", fg_color="#e11d48", hover_color="#be123c")
-                self.lbl_status_badge.configure(text="🟢 LIVE MONITORING", fg_color="#065f46", text_color="#34d399")
+                self.btn_monitor_toggle.configure(text="STOP MONITORING", fg_color="#e11d48", hover_color="#be123c")
+                self.lbl_status_badge.configure(text="LIVE MONITORING", fg_color="#065f46", text_color="#34d399")
                 lat = self.engine.estimated_latency_ms
                 actual_sr = self.engine.sample_rate
-                self.lbl_latency_badge.configure(text=f"⚡ Latency: {lat:.1f} ms ({bs} smp @ {actual_sr}Hz)", text_color="#38bdf8")
-                self.lbl_status_text.configure(text=f"Active duplex stream: Input {in_id} -> Output {out_id} | Latency: ~{lat:.1f} ms | {actual_sr} Hz")
+                
+                if hasattr(self.engine, 'in_sr') and hasattr(self.engine, 'out_sr') and self.engine.in_sr != self.engine.out_sr:
+                    rate_info = f"Dual-Rate {self.engine.in_sr//1000}k In -> {self.engine.out_sr//1000}k Out"
+                else:
+                    rate_info = f"{actual_sr} Hz"
+                    
+                self.lbl_latency_badge.configure(text=f"Latency: {lat:.1f} ms ({bs} smp | {rate_info})", text_color="#38bdf8")
+                self.lbl_status_text.configure(text=f"Active stream: Input {in_id} -> Output {out_id} | Latency: ~{lat:.1f} ms | {rate_info}")
             else:
                 messagebox.showerror("Audio Stream Error", f"Failed to start stream with selected devices.\n{self.engine.last_status_msg}")
 
