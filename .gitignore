@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+
+# PyInstaller / Build outputs
+dist/
+build/
+*.spec
+
+# Live recordings
+recordings/*.wav
+!recordings/.gitkeep
+
+# IDE / Editor
+.vscode/
+.idea/
+*.swp
+*.log
